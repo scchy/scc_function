@@ -26,6 +26,7 @@ class Feats_filter():
     特征筛选  
     1- 依据相关性剔除其中一个   corr_model_filter  
     2- 依据偏度以及峰度剔除   skew_kurt_filter
+    3- corr_nunique特征筛选要增加 待增加  
        例：
          test_flg = df_all.label.isna()
          cols_lst = model_input_col
@@ -146,4 +147,106 @@ class Feats_filter():
         drop_kurt_skew = [i for i in  drop_kurt_col if i in drop_skew_col]
         print(f'May drop {len(drop_kurt_skew)} cols') 
         return drop_kurt_skew
+    
+    
+  
+
+cclass models_func():
+    """
+    :classlgb_tr_model: 分类lgb模型
+    """
+    def classlgb_tr_model(x_train, y_train,  kf, lgb_param, feature_names, X_test = None
+                , pred_flg = False, feval=None):
+        """
+        : param x_train: np.array  
+        : param y_train: np.array  
+        : param kf: StratifiedKFold(n_splits=3, shuffle=True, random_state=2020)    
+        : param lgb_param: dict lgb的参数  
+        : param feature_names: list 进入模型的特征名称 用于记录重要性  
+        : param X_test: 预测集  
+        : param pred_flg: bool  
+        : param feval: lgb的自定义评估函数  
+        例：
+            model_input_col_final =  list(set(model_input_col) - set(drop_kurt_skew))
+            folds_tr = StratifiedKFold(n_splits=3, shuffle=True, random_state=2020)
+            tr_params = {
+                'bagging_freq': 5, 
+                'boost_from_average':'false',
+                'boost': 'gbdt',
+                'learning_rate': 0.05, #0.01,
+                'max_depth': 12,#5,
+                'min_data_in_leaf': 50,
+                'min_sum_hessian_in_leaf': 10.0,
+                'tree_learner': 'serial',
+                'n_estimators': 2600,
+                'early_stopping_rounds' : 500,
+                'lambda_l2': 1,
+                'objective': 'multiclass', 
+                'n_jobs':10,
+                'num_class': 5,
+                'verbosity': 1}
+
+            models, preds_test, importances, test_loss = tr_model(
+                    x_train = tr_dt[model_input_col_final].values
+                    ,y_train = tr_dt['label'].values
+                    ,kf = folds_tr
+                    ,lgb_param = tr_params
+                    ,feature_names = model_input_col_final
+                ,X_test = prd_dt[model_input_col_final].values
+                ,pred_flg = True
+                ,feval = lgb_f1_comp)
+
+        """
+        models,train_loss,test_loss = [], [], []
+        preds_test = np.zeros((len(X_test), 5), dtype=np.float)
+        importances = pd.DataFrame()
+        # 拟合
+        for fold_i, (tr_index, te_index) in enumerate(kf.split(x_train, y_train)):
+            print(f'Fold {fold_i + 1},start at: {get_now()}')
+            x_tr, x_te = x_train[tr_index],x_train[te_index]
+            y_tr, y_te = y_train[tr_index],y_train[te_index]
+            train_data = lgb.Dataset(x_tr, label = y_tr)
+            test_data = lgb.Dataset(x_te, label = y_te)
+            
+            
+            if  feval == None:
+                clf = lgb.train(lgb_param, train_data
+                                , valid_sets=[train_data, test_data]
+                                , verbose_eval = 200)
+            else:
+                clf = lgb.train(lgb_param, train_data
+                                , valid_sets=[train_data, test_data]
+                                , verbose_eval=200, feval=feval)
+            models.append(clf)
+
+            # 模型的特征的重要性
+            imp_df = pd.DataFrame()
+            imp_df['feature'] = feature_names
+            imp_df['split'] = clf.feature_importance()
+            imp_df['gain'] = clf.feature_importance(importance_type='gain')
+            imp_df['fold'] = fold_i + 1
+
+            importances = pd.concat([importances, imp_df], axis=0)
+            val_pred = np.argmax(clf.predict(x_te), axis=1)
+            tr_pred = np.argmax(clf.predict(x_tr), axis=1)
+            f1_tr = f1_score(y_te, val_pred, average='macro')
+            f1_te = f1_score(y_tr, tr_pred, average='macro')
+            train_loss.append(f1_tr)
+            test_loss.append(f1_te)
+            print('{} val f1 train/test: {:0.7f} / {:0.7f} mean_f1: {:0.7f}'\
+                .format(fold_i + 1, train_loss[-1], test_loss[-1], np.mean(test_loss)))
+
+            if pred_flg:
+                preds_test += clf.predict(X_test)[:]
+            print('-' * 80)
+
+        if pred_flg:
+            print(f'Train: {train_loss}\nVal: {test_loss}')
+            print('-' * 80)
+            print('Train{0:0.5f}_Test{1:0.5f}\n\n'.format(
+                np.mean(train_loss), np.mean(test_loss)))
+            preds_test /= (fold_i + 1)
+            return models, preds_test, importances, np.mean(test_loss)
+        else:
+            return models, importances, np.mean(test_loss)
    
