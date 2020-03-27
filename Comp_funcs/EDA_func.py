@@ -1,20 +1,30 @@
 # python 3.6
 # author: Scc_hy 
 # create date: 2019-12-24
-# Function： 数据探索函数
+# Function： 数据探索函数&数据清洗
 
-import pandas as pd
 import random
 import copy
-import numpy as np
 import matplotlib as mpl
 mpl.rcParams['font.sans-serif'] = ['SimHei']
 import seaborn as sns 
 import matplotlib.pyplot as plt 
 from  matplotlib import gridspec 
 from scc_function import data2excel ,progressing
-import sys
-
+import numpy as np
+import pandas as pd 
+from datetime import datetime
+from tqdm import tqdm
+import sys, os
+import warnings 
+warnings.filterwarnings(action = 'ignore')
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import f1_score
+import lightgbm as lgb
+from sklearn.ensemble import RandomForestClassifier
+from pyecharts.charts import Bar, Pie ,Page
+import pyecharts.options as opts 
+import scipy.stats as st
 large = 22; mid = 16; small = 12
 param ={'axes.titlesize': large,
         'legend.fontsize': mid,
@@ -28,9 +38,38 @@ plt.rcParams.update(param)
 plt.style.use('ggplot')
 # sns.set_style('white')
 import missingno as msn
-from tqdm import tqdm
 
-def M_reduce_mem_usage(df: pd.DataFrame) -> pd.DataFrame:
+# ================================================================
+#                          零、  实用探索辅助函数
+# ================================================================
+def get_now():
+    """
+    查看现在的时间
+    """
+    return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
+def group_feature(df: pd.DataFrame, key: str, target: pd.DataFrame, aggs: list) -> pd.DataFrame:
+    """
+    聚合特征生成
+    param df: pd.DataFrame 处理的数据集  
+    param key: str /list        需要groupby 的key  
+    param target: str      聚合的特征  
+    param agg: list        聚合的类型  
+    return pd.DataFrame columns = [target, ag]
+    例如：  
+        aggs_list = ['max', 'min', 'mean', 'std', 'skew', 'sum']  
+        group_feature(df, 'ship','x',aggs_list)  
+    """
+    agg_dict = {}
+    for ag in aggs:
+        agg_dict[f'{target}_{ag}'] = ag
+    print(agg_dict)
+    outdt = df.groupby(key)[target].agg(agg_dict).reset_index()
+    return outdt
+
+
+def reduce_df_mem(df: pd.DataFrame) -> pd.DataFrame:
     """ 
     压缩大的df
     https://www.kaggle.com/gemartin/load-data-reduce-memory-usage
@@ -71,6 +110,314 @@ def M_reduce_mem_usage(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# ================================================================
+#                          一、  数据探索
+# Explore_func()   --->>> 基本是查看为主，查看缺失，分布，异常  
+# EDA_func()   --->>> 着重于发现特点, 查看分布, 目标与变量之间的关系(分类分布， 连续相关性) 
+# ================================================================
+## 1-1 基本查看
+class Explore_func():
+    """
+    基本是查看为主，查看缺失，分布，异常  
+    :  get_losedf(df, plt_flg=False) --> 查看缺失  
+    :  Sta_inf(dt)                  --> 查看pd.DataFrame分布或某个特征分布  
+    :  tr_te_cols_distribute        --> 查看测试集和训练集的分布差异    
+    :  outliers_proc                --> 处理异常值，考虑是否删除 （依据test_flg & delete_flg)     
+    :  num_target_distrbuted(df_all, targert, plt_flg = True) --> 查看数值型特征的分布  
+    :  cat_target_distrbuted(df_all, targert, plt_flg = True) --> 查看分类型特征的分布  
+    :  reduce_df_mem(df) --> 压缩数据  
+    """
+    def get_losedf(self, df_all, plt_flg = False):
+        """
+        查看缺失
+        """
+        ls_df = pd.DataFrame(df_all.isna().sum()).reset_index()
+        ls_df.columns = ['feat', 'ls_cnt']
+        ls_df['ls_rate'] = ls_df.ls_cnt / df_all.shape[0] * 100 
+        ls_df = ls_df.loc[ls_df.ls_cnt != 0 ,:].sort_values(by = 'ls_cnt', ascending = False).reset_index(drop = True)
+        if plt_flg:
+            bar_p = (
+                        Bar()
+                        .add_xaxis(ls_df.feat.tolist())
+                        .add_yaxis('流失特征柱状图',ls_df.ls_cnt.tolist())
+                    )
+            return ls_df, bar_p
+
+        return ls_df 
+
+
+    def Sta_inf(self, dt):
+        """
+        查看数据集或者一个col的分布
+        [np.min, np.max, np.mean, np.ptp, np.std, np.var]
+        """
+        print('_min:', np.min(dt))
+        print('_max:', np.max(dt))
+        print('_mean:', np.mean(dt))
+        print('_ptp:', np.ptp(dt))
+        print('_std:', np.std(dt))
+        print('_var:', np.var(dt))
+        if dt.shape[1] == 1:
+            print('_skew:', np.skew(dt))
+            print('_kurt:', np.kurt(dt))
+
+
+    def tr_te_cols_distribute(self, df_all, cols_lst, test_flg, func = 'skew'):
+        """
+        查看测试集和训练集的分布差异  
+        注意用 skew kurt的时候需要时  
+        param df_all:     pd.DataFrame  
+        param  test_flg:  test_flg 测试集标识 np.array bool  
+        param cols_lst:   list 查看特征分布的字段  
+        param func: str: skew, nunique, kurt  
+         
+        df_func出来后，处理方式建议: 
+
+        """
+        df_func = pd.DataFrame(columns = [f'tr_{func}', f'te_{func}'])
+        f = eval(f'pd.Series.{func}')
+        for col_i in tqdm(cols_lst):
+            tr_i = f(df_all.loc[~test_flg, col_i])
+            te_i = f(df_all.loc[test_flg, col_i])
+            df_func.loc[col_i, f'tr_{func}'] = tr_i
+            df_func.loc[col_i, f'te_{func}'] = te_i
+
+        plt.figure(figsize=(25, 8))
+        plt.title(f'The {func} distribution of all feats')
+        plt.plot(df_func.index.tolist(), df_func[f'tr_{func}'].tolist(), label = 'tr')
+        plt.plot(df_func.index.tolist(), df_func[f'te_{func}'].tolist(), label = 'te')
+        plt.xticks(rotation = 75)
+        plt.legend()
+        plt.show()
+        return df_func
+
+
+    def box_plot_outliers(self, data_ser, bax_scale = 3):
+        """
+        利用箱线图去除异常值:
+        param  data_ser: pd.Series
+        param  bax_scale: 
+        """
+        iqr = bax_scale * (data_ser.quantile(0.75) - data_ser.quantile(0.25))
+        val_low = data_ser.quantile(0.25) - iqr
+        val_up = data_ser.quantile(0.75) + iqr
+        low_bool = data_ser < val_low
+        up_bool = data_ser >  val_up
+        return (low_bool, up_bool), (val_low, val_up)
+
+
+    def outliers_proc(self, df, col, test_flg, delete_flg = False, scale = 3):
+        """
+        处理异常值，考虑是否删除 （依据test_flg & delete_flg）  
+        仅仅对一个特征进行操作  
+        : param df: pd.DataFrame  
+        : param col: str  
+        : param test_flg: np.array(bool)  
+        : param delete_flg: bool 是否删除异常点  
+        : param scale:  int  异常判断标准范围 
+        """
+        dt_tmp = df.copy(deep=True)
+        dt_ser = dt_tmp[col]
+        bool_, value_ =  box_plot_outliers(dt_ser, bax_scale = scale)
+        # 人工删除 并判断是否要删除 
+        low_test_len = sum((bool_[0])| test_flg)
+        uper_test_len = sum((bool_[1])| test_flg)
+        delete_flg_low = False if low_test_len > 0 else delete_flg
+        delete_flg_up = False if uper_test_len > 0 else delete_flg
+        print(f'Allowed Delete low is: <{delete_flg_low}> ,Allowed Delete upper is: <{delete_flg_up}>')
+        if delete_flg_low:
+            del_index_low = df.loc[ bool_[0], col].index.tolist()
+            print(f'Delete lower number is: {len(del_index_low)}')
+            dt_tmp = dt_tmp.drop(del_index_low)
+            dt_tmp.reset_index(drop = True, inplace = True)
+            print(f'Now the shape of data is {dt_tmp.shape}')
+        if delete_flg_up:
+            del_index_up = df.loc[ bool_[1], col].index.tolist()
+            print(f'Delete upper number is: {len(del_index_up)}')
+            dt_tmp = dt_tmp.drop(del_index_up)
+            dt_tmp.reset_index(drop = True, inplace = True)
+            print(f'Now the shape of data is {dt_tmp.shape}')
+            
+        print(f'Description of data less than the lower bound  is:')
+        print(df.loc[df[bool_[0]].index, col].describe())
+        print(f'Description of data larger than the upper bound is:')
+        print(df.loc[df[bool_[1]].index, col].describe())
+        
+        
+        if delete_flg:
+            fig, ax = plt.subplots(nrows = 1, ncols = 2, figsize =(10, 7))
+            sns.boxplot(y=col, data = df, palette='Set1', ax=ax[0])
+            sns.boxplot(y=col, data = dt_tmp, palette='Set1', ax=ax[1])
+            plt.show()
+            return dt_tmp
+        
+        plt.figure(figsize =(10, 7))
+        sns.boxplot(y=col, data = df, palette='Set1')
+        plt.show() 
+        return dt_tmp
+
+
+class EDA_func():
+    """
+    着重于发现特点, 查看分布, 目标与变量之间的关系(分类分布， 连续相关性)  
+    :  get_trte_pie(df_all, target) --> 查看一个训练集和预测集比例  
+    :  single_numfeat_distrbuted(df_all, targert, plt_flg = True) --> 查看一个数值型特征的分布拟合  
+    :  multi_catfeat_distrbuted(df_all, targert, plt_flg = True) --> 查看分类特征的分布    
+    :  get_objct_label_draw -> 绘制分类特征和label之间的分布关系  
+         子函数: 
+            get_label_x_group -> 计算特征的和label的聚合信息  
+            bar_stack1(dt, feat, target = 'label',type_draw = '%') -> 绘制一个特征的百分比堆叠图
+    """
+    def single_numfeat_distrbuted(self, df_all:pd.DataFrame, targert:str, plt_flg = True) -> pd.DataFrame:
+        """
+        一般查看回归的目标变量  
+        查看一个数值型特征的分布拟合  
+        : param df_all:  pd.DataFrame  
+        : param targert: str  
+        : param plt_flg: bool  
+        """
+        y = df_all[targert].tolist()
+        plt.figure(figsize=(16,8))
+        plt.subplot(131)
+        sns.distplot(y, kde=False, fit = st.johnsonsu)
+        plt.subplot(132)
+        sns.distplot(y, kde=False, fit = st.norm)
+        plt.subplot(133)
+        sns.distplot(y, kde=False, fit = st.lognorm)
+        plt.show() 
+        skew_, kurt_= df_all[targert].skew(), df_all[targert].kurt()
+        msg = f'Skewness: {skew_}, Kurtosis: {kurt_}'
+        print(msg)
+        return skew_, kurt_
+
+    def multi_catfeat_distrbuted(self, tr_dt:pd.DataFrame, col_obj:list, plt_flg = True) -> pd.DataFrame:
+        """
+        查看分类特征的分布(pyecharts)  
+        : param tr_dt:  pd.DataFrame  
+        : param col_obj: list  
+        : param plt_flg: bool  
+        """
+        aggs_list = ['count']
+        Page_col = Page("类型特征特征分布情况",layout=Page.SimplePageLayout)
+        df_out = pd.DataFrame()
+        for i in col_obj:
+            df_tmp = group_feature(tr_dt, i, i, aggs_list)
+            if df_tmp.shape[0] < 1:
+                pass
+            else:
+                df_tmp.columns = ['feat_', 'cnt']
+                df_tmp.loc[:,'col_name'] = i 
+                df_out = pd.concat([df_out, df_tmp],axis = 0 ,ignore_index =True)
+                tmp_pie = (
+                    Pie().add(f'特征: {i} 的种类分布', [list(z) for z in zip(df_tmp.iloc[:,0],df_tmp.iloc[:,1])]
+                        ,radius=["30%", "75%"]
+                        ,rosetype = "radius" if df_tmp.shape[0] >= 3 else None)
+                        .set_series_opts(label_opts=opts.LabelOpts(formatter="{b}:{c}:({d}%)"))
+                        .set_global_opts(
+                            title_opts=opts.TitleOpts(title = f'特征: {i} 的种类分布')
+                            ,legend_opts=opts.LegendOpts(
+                            type_="scroll", pos_top="20%", pos_left="80%", orient="vertical"
+                        ))
+                )
+                Page_col.add(tmp_pie)
+        return Page_col, df_out
+
+    def get_trte_pie(self, df_all, target):
+        """
+        查看一个训练集和预测集比例
+        : param df_all: pd.DataFrame  
+        : param target: str 目标特征
+        """
+        tr_te_cnt = list(df_all[target].isna().value_counts())
+        tr_te_pie = (
+            Pie().add('', [list(z) for z in zip(['训练', '测试'],tr_te_cnt)]
+                    ,radius=["30%", "75%"]
+            )
+            .set_series_opts(label_opts=opts.LabelOpts(formatter="{b}:{c}:({d}%)"))
+            .set_global_opts(
+                title_opts=opts.TitleOpts(title = '训练集和测试集占比')
+            )
+        )
+    return tr_te_pie
+
+
+    def get_label_x_group(dt, feat, target = 'label'):
+        """
+        计算特征的和label的聚合信息  
+        param df: 数据集  
+        param feat: 特征  
+        param target：目标变量  
+        """
+        t = dt.groupby([target,feat])[target].agg({'cnt':'count'}).reset_index()
+        t['g_sum'] = t.groupby(target)['cnt'].transform('sum')
+        t['g_cnt_p'] =  t['cnt']/t['g_sum']
+        return t
+
+
+    def bar_stack1(dt, feat, target = 'label',type_draw = '%'):
+        """
+        绘制一个特征的百分比堆叠图  
+        param dt: 数据集  
+        param target: string  
+        param type_draw: 绘制类型 频率, 百分比堆叠图 ['%', 'cnt'] 
+        """
+        t = get_label_x_group(dt, feat, target )
+        target_col = dt[target].unique().tolist()
+        draw_dict = {'%': 'g_cnt_p', 'cnt':'cnt', 'percent':'g_cnt_p'}
+        try:
+            draw_v = draw_dict[type_draw]
+        except:
+            raise KeyError("print right type_draw in ['%', 'percent', 'cnt']")
+        c = (
+            Bar()
+            .add_xaxis(target_col)
+        )
+        val_arr,feat_lst = [], []
+        for feat_i in t[feat].unique():
+            val_lst = []
+            for label_i in target_col:
+                try:
+                    val_lst.append(
+                        t.loc[(t.loc[:,target] == label_i) & (t.loc[:,feat] == feat_i)
+                            , draw_v].values[0]
+                    )
+                except:
+                    val_lst.append(0.00)
+            c.add_yaxis(f"{feat_i}", val_lst, stack="stack1")
+
+        c.set_series_opts(label_opts=opts.LabelOpts(is_show=False))
+        msg = '\nPercent Graph' if type_draw == '%' else '\nFrequence Graph'
+        c.set_global_opts(title_opts=opts.TitleOpts(title=f"{feat}{msg}"))
+        return c
+
+
+    def get_objct_label_draw(dt:pd.DataFrame, col_list:list) -> Page:
+        """
+        绘制分类特征和label之间的分布关系  
+        """
+        page_bar = Page("类型特征特征分布情况",layout=Page.SimplePageLayout)
+        for feat_i in col_list:
+            c = bar_stack1(dt, feat_i, target='label' ,type_draw = '%')
+            page_bar.add(c)
+    #         c = bar_stack1(dt, feat_i, type_draw = 'cnt')
+    #         page_bar.add(c)
+            print(f'Finished Draw {feat_i}')
+        return page_bar
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 def M_data_scan(df: pd.DataFrame) -> None:
     """
     数据整体描述  
@@ -102,6 +449,7 @@ def M_data_scan(df: pd.DataFrame) -> None:
 
 class explore_2_excel(object):
     """
+    快速浏览输出到excel
     数据的文本和数值型特征
     """
     def __init__(self, out_file):
@@ -159,7 +507,8 @@ class explore_2_excel(object):
             return print('已经将文本字段的字段内容占比输出到:\n \t{}--{}\n'.format(self.out_file, sheet_name))
 
     def num_cat2csv(self, sheet_name = 'num_cat', scanmethod = '5sd'):
-        """搜索极端值并进行简单报告  
+        """
+        搜索极端值并进行简单报告  
         scanmethod: 极端值确认标准， 5sd 超过均数+-5被标准差  
         返回: 包括全部数值变量搜索结果的数据框  
         """
@@ -277,58 +626,6 @@ def incresing(v: pd.Series) -> bool:
 #     if incre_bool == 1 :
 #         print(col)
 
-
-
-
-import lightgbm as lgb
-import time
-from sklearn.model_selection import KFold,StratifiedKFold
-# 已经合并到 model_funcs
-def validation_prediction_lgb(X,y,feature_names, ratio =1, X_test = None,istest = False):
-    n_fold = 5
-    folds = StratifiedKFold(n_splits=n_fold, shuffle=True, random_state=42)
-    params = {
-    'bagging_freq': 5, 
-    'boost_from_average':'false',
-    'boost': 'gbdt',
-    'learning_rate': 0.01,
-    'max_depth': 5,
-    'metric':'auc',
-    'min_data_in_leaf': 50,
-    'min_sum_hessian_in_leaf': 10.0,
-    'tree_learner': 'serial',
-    'objective': 'binary',
-    'verbosity': 1}
-    importances = pd.DataFrame() 
-    if istest:
-        prediction = np.zeros(len(X_test))
-    models = []
-    for fold_n, (train_index, valid_index) in enumerate(folds.split(X,y)):
-        print('Fold', fold_n, 'started at', time.ctime())
-        X_train, X_valid = X[train_index], X[valid_index]
-        y_train, y_valid = y[train_index], y[valid_index]
-        weights = [ratio  if val == 1 else 1 for val in y_train]
-        
-        train_data = lgb.Dataset(X_train, label=y_train,  weight=weights)
-        valid_data = lgb.Dataset(X_valid, label=y_valid)
-        model = lgb.train(params,train_data,num_boost_round=20000,
-                        valid_sets = [train_data, valid_data],verbose_eval=200,early_stopping_rounds = 200)
-        
-        imp_df = pd.DataFrame() 
-        imp_df['feature']  = feature_names
-        imp_df['split']    = model.feature_importance()
-        imp_df['gain']     = model.feature_importance(importance_type='gain')
-        imp_df['fold']     = fold_n + 1
-        
-        importances = pd.concat([importances, imp_df], axis=0)
-        
-        models.append(model)
-        if istest == True:
-            prediction += model.predict(X_test, num_iteration=model.best_iteration)/5
-    if istest == True:     
-        return models,importances, prediction
-    else:
-        return models,importances
 
 
 # ===================================================================
