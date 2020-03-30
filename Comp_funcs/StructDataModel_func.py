@@ -151,7 +151,7 @@ class Feats_filter():
     
   
 
-cclass models_func():
+class models_func():
     """
     :classlgb_tr_model: 分类lgb模型
     """
