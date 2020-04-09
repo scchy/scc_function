@@ -128,17 +128,16 @@ class Feats_filter():
         return model_input_col, impt_dct
    
    def  skew_kurt_filter(df_all:pd.DataFrame , cols_lst:list, test_flg: np.array
-                         , skew_filter = 0.55:float, kurt_filter = 0.7:float) -> list:
+                         , skew_filter = 0.55 , kurt_filter = 0.7 ) -> list:
         """
         依据偏度和峰值筛选特征
         : param df_all: pd.DataFrame   
-        : param cols_lst: pd.DataFrame   
+        : param cols_lst: list
         : param test_flg: df_all.target.isna() 
         : param skew_filter: 测试集训练集的skew差 / 测试集skew   的比例阈值  
         : param kurt_filter: 测试集训练集的kurt差 / 测试集kurt   的比例阈值  
         """
         test_flg = df_all.label.isna()
-        cols_lst = model_input_col
         df_skew = tr_te_cols_distribute(df_all, cols_lst, test_flg, func = 'skew')
         drop_skew_col = df_skew[(df_skew.tr_skew - df_skew.te_skew).map(abs) /  df_skew.te_skew.map(lambda x: x if x != 0 else 1) > skew_filter].index.tolist()
         
