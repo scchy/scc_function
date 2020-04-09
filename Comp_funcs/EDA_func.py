@@ -125,7 +125,7 @@ class Explore_func():
     :  outliers_proc                --> 处理异常值，考虑是否删除 （依据test_flg & delete_flg)     
     :  num_target_distrbuted(df_all, targert, plt_flg = True) --> 查看数值型特征的分布  
     :  cat_target_distrbuted(df_all, targert, plt_flg = True) --> 查看分类型特征的分布  
-    :  reduce_df_mem(df) --> 压缩数据  
+    :  compute_woe1(self, x:pd.Series, y:pd.Series, na = -1) --> 计算两个类别Series (分箱-目标二分类) 的woe 和iv
     """
     def get_losedf(self, df_all, plt_flg = False):
         """
@@ -255,6 +255,40 @@ class Explore_func():
         sns.boxplot(y=col, data = df, palette='Set1')
         plt.show() 
         return dt_tmp
+
+
+    def compute_woe1(self, x:pd.Series, y:pd.Series, na = -1) -> set:
+        """
+        计算两个类别Series (分箱-目标二分类) 的woe 和iv
+        param  x:pd.Series  分箱特征
+        param  y:pd.Series 目标二分类
+        param  na:  缺失填补策略 -1
+        return： set(pd.DataFrame, np.float)
+        """
+        try:
+            tb = pd.crosstab(x.fillna(na),y,dropna=False,margins=True)
+        except:
+            tb = pd.crosstab(x,y,dropna=False,margins=True)
+        # 读取两个类的总数
+        pos = pd.value_counts(y)[1]
+        neg = pd.value_counts(y)[0]
+
+        tb['rat'] = tb.iloc[:,1] / tb.loc[:, 'All']
+        tb.fillna(0, inplace=True)
+        bad_rat = tb.iloc[:, 0] / neg
+        good_rat = tb.iloc[:,1] / pos
+        # 对于空值和无限大处理
+        good_bad_rate = (good_rat / bad_rat).fillna(0).replace(np.inf, 2**31)
+        # 处理woe的正无穷和负无穷
+        tb['woe'] = np.log(good_bad_rate) * 100
+        tb['woe'] = tb['woe'].replace(np.inf, np.log(2**31)).replace(-np.inf, 0)
+        bad_dev = good_rat - bad_rat
+        iv = sum(bad_dev * tb['woe']) /100
+        return tb, iv
+
+
+
+
 
 
 class EDA_func():
