@@ -14,7 +14,9 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import f1_score
 import lightgbm as lgb
 import copy
-from EDA_func.Explore_func import tr_te_cols_distribute
+from .EDA_func import Explore_func 
+
+tr_te_cols_distribute = Explore_func().tr_te_cols_distribute
 
 def get_now():
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -66,7 +68,6 @@ class Feats_filter():
         param train_col: 进入训练的特征  list 
         param target: 目标特征   str
         param col_corr: 根据get_col_corr 获取的高相关性列表   
-
         - 剔除相关性较高的其中一个特征
         例如：
           slt_param = {
@@ -86,7 +87,6 @@ class Feats_filter():
             'n_jobs':10,
             'num_class': 5,
             'verbosity': 1}
-
             col_corr =  pd_get_col_corr(df_all, 0.965)
             model_input_col, impt_dct = get_model_feature(slt_param, df_all.loc[ ~test_flg, :], train_col, 'label' ,col_corr)
         """
@@ -116,19 +116,18 @@ class Feats_filter():
         for item in col_corr:
             temp = item.split(',')
             if temp[0] in  impt_dct.keys() and temp[1] in impt_dct.keys():
-            if float(impt_dct[temp[0]]) > float(impt_dct[temp[1]]):
-                del_col = temp[1] 
-            else:
-                del_col = temp[0]
-            try :
-                model_input_col.remove(del_col)
-                print(f'remove {del_col}')
-            except:
-                pass
+                if float(impt_dct[temp[0]]) > float(impt_dct[temp[1]]):
+                    del_col = temp[1] 
+                else:
+                    del_col = temp[0]
+                try :
+                    model_input_col.remove(del_col)
+                    print(f'remove {del_col}')
+                except:
+                    pass
         return model_input_col, impt_dct
    
-   def  skew_kurt_filter(df_all:pd.DataFrame , cols_lst:list, test_flg: np.array
-                         , skew_filter = 0.55 , kurt_filter = 0.7 ) -> list:
+    def  skew_kurt_filter(self, df_all, cols_lst, test_flg, skew_filter = 0.55, kurt_filter = 0.7):
         """
         依据偏度和峰值筛选特征
         : param df_all: pd.DataFrame   
@@ -137,10 +136,9 @@ class Feats_filter():
         : param skew_filter: 测试集训练集的skew差 / 测试集skew   的比例阈值  
         : param kurt_filter: 测试集训练集的kurt差 / 测试集kurt   的比例阈值  
         """
-        test_flg = df_all.label.isna()
         df_skew = tr_te_cols_distribute(df_all, cols_lst, test_flg, func = 'skew')
         drop_skew_col = df_skew[(df_skew.tr_skew - df_skew.te_skew).map(abs) /  df_skew.te_skew.map(lambda x: x if x != 0 else 1) > skew_filter].index.tolist()
-        
+
         df_kurt = df_nunique = tr_te_cols_distribute(df_all, cols_lst, test_flg, func = 'kurt')
         drop_kurt_col = df_kurt[(df_kurt.tr_kurt - df_kurt.te_kurt).map(abs) /  df_kurt.te_kurt.map(lambda x: x if x != 0 else 1) > kurt_filter].index.tolist()
         drop_kurt_skew = [i for i in  drop_kurt_col if i in drop_skew_col]
@@ -184,7 +182,6 @@ class models_func():
                 'n_jobs':10,
                 'num_class': 5,
                 'verbosity': 1}
-
             models, preds_test, importances, test_loss = tr_model(
                     x_train = tr_dt[model_input_col_final].values
                     ,y_train = tr_dt['label'].values
@@ -194,7 +191,6 @@ class models_func():
                 ,X_test = prd_dt[model_input_col_final].values
                 ,pred_flg = True
                 ,feval = lgb_f1_comp)
-
         """
         models,train_loss,test_loss = [], [], []
         preds_test = np.zeros((len(X_test), 5), dtype=np.float)
