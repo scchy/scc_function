@@ -22,7 +22,7 @@ from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import f1_score
 import lightgbm as lgb
 from sklearn.ensemble import RandomForestClassifier
-from pyecharts.charts import Bar, Pie ,Page
+from pyecharts.charts import Bar, Pie ,Page, Radar
 import pyecharts.options as opts 
 import scipy.stats as st
 large = 22; mid = 16; small = 12
@@ -257,7 +257,7 @@ class Explore_func():
         return dt_tmp
 
 
-    def compute_woe1(self, x:pd.Series, y:pd.Series, na = -1) -> set:
+    def compute_woe(self, x:pd.Series, y:pd.Series, na = -1) -> set:
         """
         计算两个类别Series (分箱-目标二分类) 的woe 和iv
         param  x:pd.Series  分箱特征
@@ -286,8 +286,15 @@ class Explore_func():
         iv = sum(bad_dev * tb['woe']) /100
         return tb, iv
 
-
-
+        # 异常处理
+        def deloutliers(self, pd_series, l = 0.01, u = 0.99):
+            """
+            异常处理， 盖帽法
+            """
+            a=pd_series.quantile(l)
+            b=pd_series.quantile(u)
+            pd_series=pd_series.map(lambda x:b if x>b else a if x < a else x)
+            return pd_series
 
 
 
@@ -439,6 +446,102 @@ class EDA_func():
         return page_bar
 
 
+class cat_target_Radar():
+        def max_min_df(self, df, cols, target):
+            """
+            maxmin标准化
+            """
+            df_tmp = df[cols+[target]].copy(deep=True)
+            df_tmp = df_tmp.fillna(0)
+            df_tmp[cols] = df_tmp[cols].apply(lambda col: (col - col.min()) / (col.max() - col.min()))
+            return df_tmp
+
+        def get_view_dt(self, df_all, target, view_label, call_cols, dct=None):
+            """
+            获取目标变量两类特征（view_label）对应的call_cols 的均值，并求出差值
+            param df_all: 数据集 pd.DataFrame
+            param target: object 目标变量
+            param view_label: list 要观察的目标变量的两个类型
+            param call_cols: list 要进行比对的特征
+            param dct: dict 是否用字典将特征转换为中文
+            """
+            df_tmp = self.max_min_df(df_all.loc[df_all[target].isin(view_label), :], call_cols, target)
+            df_view = df_tmp.groupby(by = target)[call_cols].mean().T
+            df_view['diff'] = (df_view[view_label[0]]  - df_view[view_label[1]]).map(abs)
+            df_view = df_view.sort_values(by='diff',ascending=False).reset_index()
+            if dct is None:
+                pass
+            else:
+                df_view['index'] = df_view['index'].map(dct)
+            return df_view
+
+        def view_radar(self, df_view):
+            """
+            画雷达图
+            
+            例子：
+                page_ = Page()
+                for v in view_lst:
+                    view_label[1] = v
+                    df_view = get_view_dt(df_all, 'label', view_label, call_cols, call_dct)
+                    c = view_radar(df_view)
+                    page_.add(c)
+                    print(f'Finished {v}')
+                print('Finished all')  
+                page_.render_notebook()
+            """
+            c_schema = []
+            try:
+                add_name1, add_name2 = df_view.columns[1], df_view.columns[2]
+                add_value1, add_value2 = [df_view.iloc[list(range(12)), 1].tolist()], [df_view.iloc[list(range(12)), 2].tolist()]
+                max_v = max(max(add_value1[0]), max(add_value2[0])) 
+                min_v = min(min(add_value1[0]), min(add_value2[0])) 
+                max_v_set = 1 if max_v > 0.65  else max_v + min_v 
+                for i in df_view.loc[list(range(12)), 'index']:
+                    c_schema.append({"name": i, "max": max_v_set, "min": 0})      
+            except:
+                add_name1, add_name2 = df_view.columns[1], df_view.columns[2]
+                add_value1, add_value2 = [df_view.iloc[:, 1].tolist()], [df_view.iloc[:, 2].tolist()]
+                max_v = max(max(add_value1[0]), max(add_value2[0])) 
+                min_v = min(min(add_value1[0]), min(add_value2[0])) 
+                max_v_set = 1 if max_v > 0.65  else max_v + min_v 
+                for i in df_view.loc[:, 'index']:
+                    c_schema.append({"name": i, "max": max_v_set, "min": 0})      
+
+            c = (
+                Radar()
+                .add_schema(c_schema,
+                    shape="circle",
+                    center=["50%", "50%"],
+                    radius="80%",
+                    angleaxis_opts=opts.AngleAxisOpts(
+                        min_=0,
+                        max_=360,
+                        is_clockwise=False,
+                        interval=5,
+                        axistick_opts=opts.AxisTickOpts(is_show=False),
+                        axislabel_opts=opts.LabelOpts(is_show=False),
+                        axisline_opts=opts.AxisLineOpts(is_show=False),
+                        splitline_opts=opts.SplitLineOpts(is_show=False),
+                    ),
+                    radiusaxis_opts=opts.RadiusAxisOpts(
+                        min_=0,
+                        max_= round(max_v_set, 3),
+                        interval= round(max_v_set/5,3),
+                        splitarea_opts=opts.SplitAreaOpts(
+                            is_show=True, areastyle_opts=opts.AreaStyleOpts(opacity=1)
+                        ),
+                    ),
+                    polar_opts=opts.PolarOpts(),
+                    splitarea_opt=opts.SplitAreaOpts(is_show=False),
+                    splitline_opt=opts.SplitLineOpts(is_show=False),
+                )
+                .add(add_name1, add_value1, color="#f9713c")
+                .add(add_name2, add_value2,  color="#b3e4a1", areastyle_opts=opts.AreaStyleOpts(opacity=0.3))
+                .set_series_opts(label_opts=opts.LabelOpts(is_show=False))
+            )
+
+            return c
 
 
 
