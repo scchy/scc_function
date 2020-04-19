@@ -1,3 +1,4 @@
+# -*- coding:utf-8 -*-
 # python 3.6
 # author: Scc_hy 
 # create date: 2019-12-24
@@ -172,7 +173,6 @@ class Explore_func():
         param func: str: skew, nunique, kurt  
          
         df_func出来后，处理方式建议: 
-
         """
         df_func = pd.DataFrame(columns = [f'tr_{func}', f'te_{func}'])
         f = eval(f'pd.Series.{func}')
@@ -286,15 +286,15 @@ class Explore_func():
         iv = sum(bad_dev * tb['woe']) /100
         return tb, iv
 
-        # 异常处理
-        def deloutliers(self, pd_series, l = 0.01, u = 0.99):
-            """
-            异常处理， 盖帽法
-            """
-            a=pd_series.quantile(l)
-            b=pd_series.quantile(u)
-            pd_series=pd_series.map(lambda x:b if x>b else a if x < a else x)
-            return pd_series
+    # 异常处理
+    def deloutliers(self, pd_series, l = 0.01, u = 0.99):
+        """
+        异常处理， 盖帽法
+        """
+        a=pd_series.quantile(l)
+        b=pd_series.quantile(u)
+        pd_series=pd_series.map(lambda x:b if x>b else a if x < a else x)
+        return pd_series
 
 
 
@@ -379,7 +379,7 @@ class EDA_func():
                 title_opts=opts.TitleOpts(title = '训练集和测试集占比')
             )
         )
-    return tr_te_pie
+        return tr_te_pie
 
 
     def get_label_x_group(dt, feat, target = 'label'):
@@ -785,5 +785,3 @@ def show_path(train, type_name):
 #         if i==0 and j==0:
         ax[i,j].set_title(cur_id)
     plt.show()
-
-
